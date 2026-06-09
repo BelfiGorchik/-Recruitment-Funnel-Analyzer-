@@ -70,12 +70,9 @@ $$SLA_{rate} = \frac{A_{on\_time}}{A_{total}} \times 100\%$$
    git clone https://github.com/BelfiGorchik/-Recruitment-Funnel-Analyzer-.git
    cd -Recruitment-Funnel-Analyzer-
 Установите зависимости:
-code
-Bash
+
 npm install
 Запустите модуль в демонстрационном режиме:
-code
-Bash
 npm run share
 ---
 Просмотр: После завершения сборки и запуска бэкенда откройте в браузере локальный адрес:
