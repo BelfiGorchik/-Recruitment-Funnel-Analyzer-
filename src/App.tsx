@@ -2054,7 +2054,7 @@ Allow from env=valid_token
                         </button>
                       ) : (
                         <span className="text-xs px-2.5 py-1 rounded bg-emerald-600/15 text-emerald-400 font-semibold border border-emerald-500/10 select-none">
-                          Оффер принят 🎉
+                          Оффер принят 
                         </span>
                       )}
                       
