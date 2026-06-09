@@ -1,0 +1,2123 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import type React from 'react';
+import { useEffect, useState, useMemo } from 'react';
+import QRCode from 'qrcode';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend,
+} from 'chart.js';
+import annotationPlugin from 'chartjs-plugin-annotation';
+import { Bar } from 'react-chartjs-2';
+import {
+  BarChart as RechartsBarChart, Bar as RechartsBar, XAxis, YAxis, Tooltip as RechartsTooltip, CartesianGrid, ResponsiveContainer,
+  Funnel, FunnelChart, LabelList, Cell as RechartsCell, ReferenceLine as RechartsRefLine
+} from 'recharts';
+import { Database, Filter, Briefcase, Activity, Calendar, FileDown, Download, Users, Lock, LogOut, CheckCircle, BarChart2, Sparkles, FileText, AlertTriangle, Info, X, Check, Settings2, Code, Sun, Moon, Link, Cpu, Copy, RefreshCw, Search, ArrowUp, ArrowDown, ArrowUpDown, QrCode, Share2, Plus, Trash } from 'lucide-react';
+
+ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend, annotationPlugin);
+
+// Data structures
+interface FunnelData {
+  sort: number;
+  stage: string;
+  count: number;
+}
+
+interface DelaysData {
+  sort: number;
+  stage: string;
+  avg_days: number;
+}
+
+const COLORS = ['#a855f7', '#8b5cf6', '#6366f1', '#3b82f6', '#0ea5e9', '#06b6d4', '#14b8a6'];
+
+export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+
+  const [dateRange, setDateRange] = useState('all');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+  const [chartType, setChartType] = useState<'recharts' | 'chartjs'>('recharts');
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [integrationModalOpen, setIntegrationModalOpen] = useState(false);
+  const [integrationTab, setIntegrationTab] = useState<'iframe' | 'api' | 'webhooks'>('iframe');
+  const [apiToken, setApiToken] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [candidatesPage, setCandidatesPage] = useState(1);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [shareTab, setShareTab] = useState<'current' | 'preview' | 'dev'>('current');
+  const [copiedLink, setCopiedLink] = useState<'current' | 'preview' | 'dev' | null>(null);
+  const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
+
+  useEffect(() => {
+    let url = '';
+    if (shareTab === 'current') {
+      url = typeof window !== 'undefined' ? window.location.origin : '';
+    } else if (shareTab === 'preview') {
+      url = 'https://ais-pre-4uf4zmbn25sf2botd4u2gv-739155371727.europe-west2.run.app';
+    } else {
+      url = 'https://ais-dev-4uf4zmbn25sf2botd4u2gv-739155371727.europe-west2.run.app';
+    }
+    
+    if (!url) return;
+
+    QRCode.toDataURL(url, {
+      width: 256,
+      margin: 2,
+      color: {
+        dark: '#2e1065',
+        light: '#ffffff'
+      }
+    })
+    .then(dataUrl => setQrCodeDataUrl(dataUrl))
+    .catch(err => console.error('Error rendering QR:', err));
+  }, [shareTab]);
+
+  const handleCopyLink = (url: string, type: 'current' | 'preview' | 'dev') => {
+    navigator.clipboard.writeText(url);
+    setCopiedLink(type);
+    setTimeout(() => setCopiedLink(null), 2000);
+  };
+
+  const [candidatesList, setCandidatesList] = useState<any[]>([]);
+  const [isCandidatesLoading, setIsCandidatesLoading] = useState(false);
+  const [showAddCandidateModal, setShowAddCandidateModal] = useState(false);
+  const [newCandidateName, setNewCandidateName] = useState('');
+  const [newCandidatePhone, setNewCandidatePhone] = useState('');
+  const [newCandidateSource, setNewCandidateSource] = useState('HeadHunter');
+
+  const [showAddVacancyModal, setShowAddVacancyModal] = useState(false);
+  const [newVacancyTitle, setNewVacancyTitle] = useState('');
+
+  const clientStages = [
+    { name: 'Новый отклик', action: 'Назначить скрининг', actionType: 'move', color: 'bg-slate-500/10 text-slate-300 border border-slate-500/20' },
+    { name: 'Скрининг резюме', action: 'Провести HR-интервью', actionType: 'move', color: 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/30' },
+    { name: 'HR-интервью', action: 'Отправить ТЗ', actionType: 'move', color: 'bg-amber-500/10 text-amber-400 border border-amber-500/20' },
+    { name: 'Тестовое задание', action: 'Перевести на Тех-собес', actionType: 'move', color: 'bg-blue-500/10 text-blue-400 border border-blue-500/20' },
+    { name: 'Техническое интервью', action: 'Направить в СБ', actionType: 'move', color: 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20' },
+    { name: 'Проверка СБ', action: 'Выставить оффер', actionType: 'move', color: 'bg-purple-500/10 text-purple-400 border border-purple-500/20' },
+    { name: 'Оффер', action: 'Завершить наем 🎉', actionType: 'accept', color: 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' }
+  ];
+
+  const fetchCandidatesList = async () => {
+    setIsCandidatesLoading(true);
+    try {
+      const res = await fetch(`/api/analytics/candidates?id_vacancy=${selectedVacancy}&search=${searchTerm}`);
+      if (res.ok) {
+        const data = await res.json();
+        const mapped = data.map((cand: any) => {
+          const stObj = clientStages[(cand.stageId - 1) % clientStages.length] || clientStages[0];
+          return {
+            ...cand,
+            stageColor: stObj.color,
+            action: stObj.action,
+            actionType: stObj.actionType
+          };
+        });
+        setCandidatesList(mapped);
+      }
+    } catch (err) {
+      console.error("Error loading candidates:", err);
+    } finally {
+      setIsCandidatesLoading(false);
+    }
+  };
+
+  const handleAddCandidate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCandidateName.trim()) return;
+    try {
+      const res = await fetch('/api/analytics/candidates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          full_name: newCandidateName,
+          phone_number: newCandidatePhone,
+          source: newCandidateSource,
+          id_vacancy: selectedVacancy,
+          id_stage: 1
+        })
+      });
+      if (res.ok) {
+        setNewCandidateName('');
+        setNewCandidatePhone('');
+        setShowAddCandidateModal(false);
+        await fetchCandidatesList();
+        await fetchAnalytics(true);
+      }
+    } catch (err) {
+      console.error("Error adding candidate:", err);
+    }
+  };
+
+  const handleMoveCandidate = async (id: number, currentStageId: number) => {
+    const nextStageId = currentStageId + 1;
+    if (nextStageId > 7) return; 
+    try {
+      const res = await fetch('/api/analytics/candidates/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id_candidate: id,
+          id_vacancy: selectedVacancy,
+          id_stage: nextStageId
+        })
+      });
+      if (res.ok) {
+        await fetchCandidatesList();
+        await fetchAnalytics(true);
+      }
+    } catch (err) {
+      console.error("Error moving candidate:", err);
+    }
+  };
+
+  const handleDeleteCandidate = async (id: number) => {
+    try {
+      const res = await fetch('/api/analytics/candidates/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id_candidate: id })
+      });
+      if (res.ok) {
+        await fetchCandidatesList();
+        await fetchAnalytics(true);
+      }
+    } catch (err) {
+      console.error("Error deleting candidate:", err);
+    }
+  };
+
+  const handleAddVacancy = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newVacancyTitle.trim()) return;
+    try {
+      const res = await fetch('/api/analytics/vacancies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_title: newVacancyTitle })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setNewVacancyTitle('');
+        setShowAddVacancyModal(false);
+        await fetchVacancies();
+        setSelectedVacancy(Number(data.id_vacancy));
+      }
+    } catch (err) {
+      console.error("Error adding vacancy:", err);
+    }
+  };
+
+  const [sortField, setSortField] = useState<'name' | 'vacancy' | 'stage' | null>(null);
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+
+  const filteredCandidates = useMemo(() => {
+    let result = [...candidatesList];
+    if (sortField) {
+      result.sort((a, b) => {
+        const valA = a[sortField] ? String(a[sortField]).toLowerCase() : '';
+        const valB = b[sortField] ? String(b[sortField]).toLowerCase() : '';
+        if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
+        if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+    return result;
+  }, [candidatesList, sortField, sortDirection]);
+
+  const handleSort = (field: 'name' | 'vacancy' | 'stage') => {
+    if (sortField === field) {
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
+  const candidatesItemsPerPage = 20;
+  const paginatedCandidates = filteredCandidates.slice(0, candidatesPage * candidatesItemsPerPage);
+
+  const generateApiToken = () => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    const prefix = 'hr_api_';
+    let token = prefix;
+    for (let i = 0; i < 32; i++) {
+      token += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    setApiToken(token);
+  };
+  
+  const [exportModalState, setExportModalState] = useState<{isOpen: boolean, format: 'csv'|'pdf'|'json'}>({isOpen: false, format: 'csv'});
+  const [exportConfig, setExportConfig] = useState({
+    includeFunnel: true,
+    includeDelays: true,
+    includeInsights: true,
+    rawCandidates: false
+  });
+
+  // Webhooks states
+  const [webhookUrl, setWebhookUrl] = useState('https://agency-portal.ru/webhooks/hr');
+  const [webhookEvents, setWebhookEvents] = useState({
+    candidateCreated: true,
+    stageChanged: true,
+    offerAccepted: true,
+    candidateRejected: false,
+  });
+  const [testWebhookStatus, setTestWebhookStatus] = useState<'idle' | 'sending' | 'success' | 'error'>('idle');
+  const [testWebhookResult, setTestWebhookResult] = useState<string>('');
+
+  // Dynamic Vacancy dropdown states
+  const [selectedVacancy, setSelectedVacancy] = useState<number>(1);
+  const [vacanciesList, setVacanciesList] = useState<{ id: number; title: string }[]>([
+    { id: 1, title: 'Senior React Developer' },
+    { id: 2, title: 'QA Automation Engineer' },
+    { id: 3, title: 'HR Manager' }
+  ]);
+
+  // Database status states
+  const [dbStatus, setDbStatus] = useState<{ connected: boolean; dbName: string }>({
+    connected: false,
+    dbName: 'СУБД: Определение...'
+  });
+  const [isImporting, setIsImporting] = useState(false);
+  const [dbNotification, setDbNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const [funnelData, setFunnelData] = useState<FunnelData[]>([]);
+  const [delaysData, setDelaysData] = useState<DelaysData[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchDbStatus = async () => {
+    try {
+      const res = await fetch('/api/analytics/status');
+      if (res.ok) {
+        const data = await res.json();
+        setDbStatus({
+          connected: data.connected,
+          dbName: data.connected ? 'СУБД: XAMPP MySQL (Активна)' : 'СУБД: Имитация (БД Offline)'
+        });
+      } else {
+        setDbStatus({
+          connected: false,
+          dbName: 'СУБД: Имитация (БД Offline)'
+        });
+      }
+    } catch {
+      setDbStatus({
+        connected: false,
+        dbName: 'СУБД: Имитация (БД Offline)'
+      });
+    }
+  };
+
+  const fetchVacancies = async () => {
+    try {
+      const res = await fetch('/api/analytics/vacancies');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setVacanciesList(data.map((item: any) => ({
+            id: Number(item.id),
+            title: item.title || item.job_title
+          })));
+        }
+      }
+    } catch (err) {
+      console.error("Error fetching vacancies:", err);
+    }
+  };
+
+  const handleImportDatabase = async () => {
+    setIsImporting(true);
+    setDbNotification(null);
+    try {
+      const res = await fetch('/api/analytics/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        await fetchDbStatus();
+        await fetchVacancies();
+        await fetchAnalytics();
+        await fetchCandidatesList();
+        setDbNotification({
+          type: 'success',
+          message: 'БД успешно обновлена! Таблицы и тестовые записи импортированы в MySQL.'
+        });
+      } else {
+        setDbNotification({
+          type: 'error',
+          message: `Ошибка импорта: ${data.error || 'БД находится в офлайн-режиме.'}`
+        });
+      }
+    } catch (err: any) {
+      setDbNotification({
+        type: 'error',
+        message: `Ошибка связи: ${err.message || 'нет ответа от бэкенда.'}`
+      });
+    } finally {
+      setIsImporting(false);
+      setTimeout(() => {
+        setDbNotification(null);
+      }, 5000);
+    }
+  };
+
+  const fetchAnalytics = async (silent = false) => {
+    if (!silent) setLoading(true);
+    let queryParams = `?id_vacancy=${selectedVacancy}`;
+    
+    if (dateRange === '30days') {
+      const start = new Date();
+      start.setDate(start.getDate() - 30);
+      queryParams += `&date_start=${start.toISOString().split('T')[0]}`;
+    } else if (dateRange === 'custom' && customStart) {
+      queryParams += `&date_start=${customStart}`;
+      if (customEnd) queryParams += `&date_end=${customEnd}`;
+    }
+
+    try {
+      const [funnelRes, delaysRes] = await Promise.all([
+        fetch(`/api/analytics/funnel${queryParams}`).then(res => res.json()),
+        fetch(`/api/analytics/delays${queryParams}`).then(res => res.json())
+      ]);
+      setFunnelData(funnelRes);
+      setDelaysData(delaysRes);
+    } catch (err) {
+      console.error("API Fetch Error:", err);
+    }
+    setLoading(false);
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !password) {
+      setLoginError('Введите данные');
+      return;
+    }
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ email, password })
+      });
+      if (res.ok) {
+        setIsAuthenticated(true);
+        setLoginError('');
+      } else {
+        setLoginError('Ошибка авторизации');
+      }
+    } catch {
+       setIsAuthenticated(true);
+    }
+  };
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchDbStatus();
+      fetchVacancies();
+    }
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchCandidatesList();
+    }
+  }, [isAuthenticated, selectedVacancy, searchTerm]);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      if (dateRange === 'custom') {
+         if (!customStart) {
+             const now = new Date();
+             const thirtyDaysAgo = new Date();
+             thirtyDaysAgo.setDate(now.getDate() - 30);
+             setCustomStart(thirtyDaysAgo.toISOString().split('T')[0]);
+             setCustomEnd(now.toISOString().split('T')[0]);
+         }
+      }
+      fetchAnalytics();
+    }
+  }, [isAuthenticated, dateRange, customStart, customEnd, selectedVacancy]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    
+    const interval = setInterval(() => {
+      fetchAnalytics(true);
+    }, 60000);
+    
+    return () => clearInterval(interval);
+  }, [isAuthenticated, dateRange, customStart, customEnd, selectedVacancy]);
+
+  const totalApplicants = funnelData.length > 0 ? funnelData[0].count : 0;
+  const hiredCount = funnelData.length > 0 ? funnelData[funnelData.length - 1].count : 0;
+  const overallConversion = totalApplicants > 0 ? ((hiredCount / totalApplicants) * 100).toFixed(1) : 0;
+
+  // Calculate detailed data for the grid
+  const detailedData = funnelData.map((fData, index) => {
+    const delayData = delaysData.find(d => d.sort === fData.sort);
+    const prevCount = index > 0 ? funnelData[index - 1].count : fData.count;
+    const conversion = prevCount > 0 ? ((fData.count / prevCount) * 100).toFixed(1) : "0.0";
+    const dropoff = index > 0 ? prevCount - fData.count : 0;
+    
+    return {
+      ...fData,
+      avg_days: delayData ? delayData.avg_days : 0,
+      conversion,
+      dropoff
+    };
+  });
+
+  const [simulationModalOpen, setSimulationModalOpen] = useState(false);
+  const [simulationProfile, setSimulationProfile] = useState('default');
+  
+  const handleSimulate = async () => {
+    setLoading(true);
+    setSimulationModalOpen(false);
+    try {
+      await fetch('/api/analytics/simulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile: simulationProfile })
+      });
+      await fetchAnalytics();
+    } catch (err) {
+      console.error(err);
+      setLoading(false);
+    }
+  };
+
+  const openExportModal = (format: 'csv' | 'pdf' | 'json') => {
+    setExportModalState({ isOpen: true, format });
+  };
+
+  const closeExportModal = () => {
+    setExportModalState({ ...exportModalState, isOpen: false });
+  };
+
+  const processExport = () => {
+    if (exportModalState.format === 'pdf') {
+      closeExportModal();
+      const originalTheme = theme;
+      setTheme('light');
+      setTimeout(() => {
+        window.print();
+        setTimeout(() => {
+          setTheme(originalTheme);
+        }, 1000);
+      }, 300);
+      return;
+    }
+
+    if (exportModalState.format === 'json') {
+      const exportData: any = {};
+      if (exportConfig.includeFunnel) exportData.funnel = detailedData;
+      if (exportConfig.includeDelays) exportData.delays = delaysData;
+      if (exportConfig.includeInsights) {
+        exportData.insights = insights.map((item: any) => ({
+          type: item.type,
+          title: item.title,
+          text: item.text,
+        }));
+      }
+      if (exportConfig.rawCandidates) {
+        exportData.candidates = filteredCandidates.map(cand => ({
+          id: cand.id,
+          name: cand.name,
+          phone: cand.phone || '',
+          source: cand.source || '',
+          vacancy: cand.vacancy,
+          stage: cand.stage,
+          date: cand.date
+        }));
+      }
+      
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `analytics_export_${Date.now()}.json`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      closeExportModal();
+      return;
+    }
+
+    // CSV format
+    let csvContent = "";
+
+    if (exportConfig.includeFunnel) {
+      csvContent += "=== ВОРОНКА НАЙМА ===\n";
+      csvContent += "Этап;Кандидатов;Отсев;Конверсия (%)\n";
+      csvContent += detailedData.map(row => `"${row.sort}. ${row.stage}";${row.count};${row.dropoff};${row.conversion}`).join("\n") + "\n\n";
+    }
+
+    if (exportConfig.includeDelays) {
+      csvContent += "=== ВРЕМЕННЫЕ ЗАДЕРЖКИ (SLA) ===\n";
+      csvContent += "Этап;Ср. время (дни)\n";
+      csvContent += delaysData.map(row => `"${row.sort}. ${row.stage}";${row.avg_days}`).join("\n") + "\n\n";
+    }
+
+    if (exportConfig.includeInsights) {
+      csvContent += "=== АВТОМАТИЧЕСКИЕ ИНСАЙТЫ ===\n";
+      csvContent += "Тип;Заголовок;Описание\n";
+      csvContent += insights.map(i => `"${i.type}";"${i.title}";"${i.text}"`).join("\n") + "\n\n";
+    }
+
+    if (exportConfig.rawCandidates) {
+      csvContent += "=== ЛОГИ КАНДИДАТОВ ===\n";
+      csvContent += "ID;ФИО Кандидата;Телефон;Источник;Вакансия;Этап;Дата перехода\n";
+      csvContent += filteredCandidates.map(cand => 
+        `${cand.id};"${cand.name}";"${cand.phone || ''}";"${cand.source || ''}";"${cand.vacancy}";"${cand.stage}";"${cand.date || ''}"`
+      ).join("\n") + "\n\n";
+    }
+    
+    // Add BOM for Excel 
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `analytics_export_${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    closeExportModal();
+  };
+
+  const generateInsights = () => {
+    if (detailedData.length === 0) return [];
+    
+    const aiInsights = [];
+    
+    let maxDropoffStage = null;
+    let maxDropoffCount = 0;
+    let slaViolations: { stage: string; days: number; diff: string }[] = [];
+
+    detailedData.forEach((row, idx) => {
+      if (row.dropoff > maxDropoffCount && idx > 0) {
+        maxDropoffCount = row.dropoff;
+        maxDropoffStage = row.stage;
+      }
+      if (row.avg_days > 3.0) {
+        slaViolations.push({ stage: row.stage, days: row.avg_days, diff: (row.avg_days - 3.0).toFixed(1) });
+      }
+    });
+
+    if (maxDropoffStage) {
+      aiInsights.push({
+        type: 'warning',
+        icon: <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 mr-2 flex-shrink-0" />,
+        color: theme === 'dark' ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-amber-200 bg-amber-50/80 text-amber-800',
+        title: 'Узкое горлышко конверсии',
+        text: `Наивысший процент отсева происходит на этапе ${maxDropoffStage} (потеряно ${maxDropoffCount} канд.). Оптимизируйте требования или процесс оценки.`,
+      });
+    }
+
+    if (slaViolations.length > 0) {
+      slaViolations.forEach(v => {
+        aiInsights.push({
+          type: 'danger',
+          icon: <ClockIcon className="w-4 h-4 text-red-400 mt-0.5 mr-2 flex-shrink-0" />,
+          color: theme === 'dark' ? 'border-red-500/30 bg-red-500/10 text-red-200' : 'border-red-200 bg-red-50/80 text-red-800',
+          title: 'Нарушение SLA',
+          text: `Задержка: Этап ${v.stage} занимает ${v.days} дн. (превышение норматива на ${v.diff} дн.). Существует риск потери кандидатов...`,
+        });
+      });
+    } else {
+      aiInsights.push({
+        type: 'danger',
+        icon: <ClockIcon className="w-4 h-4 text-red-400 mt-0.5 mr-2 flex-shrink-0" />,
+        color: theme === 'dark' ? 'border-red-500/30 bg-red-500/10 text-red-200' : 'border-red-200 bg-red-50/80 text-red-800',
+        title: 'Нарушение SLA',
+        text: `Задержка: Нормативные показатели SLA соблюдены. Не выявлено этапов, превышающих 3 дня.`,
+      });
+    }
+
+    aiInsights.push({
+      type: 'info',
+      icon: <Info className="w-4 h-4 text-blue-400 mt-0.5 mr-2 flex-shrink-0" />,
+      color: theme === 'dark' ? 'border-blue-500/30 bg-blue-500/10 text-blue-200' : 'border-blue-200 bg-blue-50/80 text-blue-800',
+      title: 'Замечание по воронке',
+      text: `Общая конверсия составляет ${overallConversion}%. Чтобы повысить количество офферов, рассмотрите расширение верхней границы воронки (сорсинг).`,
+    });
+
+    return aiInsights;
+  };
+
+  const ClockIcon = ({ className }: { className?: string }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+  );
+
+  const insights = generateInsights();
+
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-[#0b0f19] flex items-center justify-center p-4">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 w-full max-w-md shadow-2xl relative overflow-hidden">
+           {/* Decorative elements */}
+           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-purple-500 to-blue-500"></div>
+           
+           <h2 className="text-2xl text-white mt-2 mb-6 flex items-center justify-center font-medium">
+              <div className="bg-purple-600 rounded-lg w-10 h-10 flex items-center justify-center mr-3 font-bold text-white shadow-lg shadow-purple-900/50">HR</div>
+              Анализатор воронки
+           </h2>
+           <p className="text-slate-400 mb-8 text-center text-sm">Авторизация для доступа к аналитике</p>
+           
+           <form onSubmit={handleLogin} className="space-y-5">
+             <div>
+               <label className="block text-xs uppercase tracking-wider text-slate-500 mb-1.5 font-medium">Email (рабочий)</label>
+               <input 
+                  type="email" 
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="hr@company.com" 
+                  className="w-full bg-slate-950/50 border border-slate-700 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 transition-shadow" 
+                  required 
+               />
+             </div>
+             <div>
+               <label className="block text-xs uppercase tracking-wider text-slate-500 mb-1.5 font-medium">Пароль</label>
+               <input 
+                  type="password" 
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••" 
+                  className="w-full bg-slate-950/50 border border-slate-700 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 transition-shadow" 
+                  required 
+               />
+             </div>
+             {loginError && <p className="text-red-400 text-sm text-center">{loginError}</p>}
+             <button type="submit" className="w-full bg-purple-600 hover:bg-purple-500 text-white font-medium py-2.5 rounded-lg transition-colors mt-8 shadow-lg shadow-purple-900/20 flex items-center justify-center">
+               <Lock className="w-4 h-4 mr-2 opacity-70"/>
+               Войти в систему
+             </button>
+           </form>
+           <div className="mt-6 text-center">
+              <span className="text-[10px] uppercase font-mono tracking-wider text-slate-500 bg-slate-800/50 px-2 py-1 rounded">Режим прототипа: введите любые данные</span>
+           </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`min-h-screen font-sans print:bg-white print:text-black ${theme === 'dark' ? 'bg-[#0b0f19] text-white' : 'theme-light text-slate-900 bg-white'}`}>
+      {/* Top Navbar */}
+      <div className="bg-[#111827] border-b border-slate-800 px-4 sm:px-6 py-4 flex flex-col md:flex-row md:items-center justify-between print:hidden gap-4">
+         <div className="flex flex-wrap items-center gap-2 mb-1 md:mb-0">
+            <div className="bg-purple-600 rounded-md w-9 h-9 flex items-center justify-center font-bold text-white text-sm flex-shrink-0">HR</div>
+            <h1 className="text-lg sm:text-xl font-semibold text-white tracking-tight">Анализатор воронки найма</h1>
+            <span className="bg-[#3b2063] border border-purple-700/50 text-purple-300 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded font-medium">РАБОЧИЙ ПРОТОТИП</span>
+            <span className={`border text-[10px] uppercase tracking-wider px-2 py-0.5 rounded font-medium hidden sm:inline-flex items-center gap-1.5 ${
+              dbStatus.connected 
+                ? 'bg-emerald-950/45 border-emerald-500/40 text-emerald-300' 
+                : 'bg-amber-950/45 border-amber-500/40 text-amber-300'
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${dbStatus.connected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+              {dbStatus.dbName}
+            </span>
+         </div>
+         <div className="flex flex-col sm:flex-row sm:items-center justify-between md:justify-end gap-3 sm:gap-6 text-sm text-slate-400 border-t md:border-t-0 md:border-l border-slate-800 pt-3 md:pt-0 pl-0 md:pl-6 ml-0 md:ml-2 w-full md:w-auto">
+            <span>Студент: <strong className="text-white font-medium tracking-wide">Комаров М.Н.</strong></span>
+            
+            <div className="flex space-x-4 border-l border-slate-800 pl-6 self-end sm:self-auto">
+              <button onClick={() => setShareModalOpen(true)} className="text-slate-500 hover:text-purple-400 transition-colors flex items-center space-x-1 cursor-pointer" title="Поделиться и QR-код">
+                <QrCode className="w-5 h-5" />
+              </button>
+
+              <button onClick={() => setIntegrationModalOpen(true)} className="text-slate-500 hover:text-blue-400 transition-colors flex items-center space-x-1" title="Интеграция">
+                <Code className="w-5 h-5" />
+              </button>
+              
+              <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="text-slate-500 hover:text-amber-400 transition-colors flex items-center space-x-1" title="Сменить тему">
+                 {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+              </button>
+
+              <button onClick={() => setIsAuthenticated(false)} className="text-slate-500 hover:text-white transition-colors flex items-center space-x-1" title="Выйти">
+                <LogOut className="w-5 h-5" />
+              </button>
+            </div>
+         </div>
+      </div>
+
+      <div id="dashboard-content" className="p-6 md:p-10">
+        {/* Professional Print Header - Only shown during printing */}
+        <div className="hidden print:block border-b-2 border-slate-950 pb-6 mb-8 text-black">
+          <div className="flex justify-between items-start">
+            <div className="flex items-center space-x-4">
+              <div className="bg-slate-950 text-white w-12 h-12 rounded-xl flex items-center justify-center font-black text-xl border-2 border-slate-950">
+                HR
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold tracking-tight text-slate-900 uppercase">Официальный аналитический отчет</h1>
+                <p className="text-xs text-slate-600 font-mono tracking-wider mt-0.5">HR-ANALYZER // МОНИТОРИНГ И ETL-МЕТРИКИ ВОРОНКИ НАЙМА</p>
+              </div>
+            </div>
+            <div className="text-right font-mono text-[11px] text-slate-700 space-y-1">
+              <div><strong className="text-slate-900 font-semibold">Разработчик:</strong> Комаров М.Н.</div>
+              <div><strong className="text-slate-900 font-semibold">Роль:</strong> Студент-разработчик</div>
+              <div><strong className="text-slate-900 font-semibold">Дата генерации:</strong> {new Date().toLocaleDateString('ru-RU')}</div>
+              <div><strong className="text-slate-900 font-semibold">Протокол контроля:</strong> IDEF0 / ETL-K-98</div>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-3 gap-6 mt-6 pt-6 border-t border-slate-200 text-xs text-slate-800">
+            <div>
+              <p className="text-slate-400 uppercase tracking-widest text-[9px] font-bold mb-1">СВЕДЕНИЯ О КОМИССИИ</p>
+              <p className="font-semibold text-slate-900">Аттестационная комиссия HR-систем</p>
+              <p className="text-slate-500 text-[11px]">Цифровая экосистема управления человеческим капиталом</p>
+            </div>
+            <div>
+              <p className="text-slate-400 uppercase tracking-widest text-[9px] font-bold mb-1">ФОКУСНАЯ ВАКАНСИЯ</p>
+              <p className="font-semibold text-slate-900">
+                {vacanciesList.find(v => v.id === selectedVacancy)?.title || 'Senior React Developer'}
+              </p>
+              <p className="text-slate-500 text-[11px]">Департамент фронтенд-разработки</p>
+            </div>
+            <div>
+              <p className="text-slate-400 uppercase tracking-widest text-[9px] font-bold mb-1">АНАЛИЗИРУЕМЫЙ ПЕРИОД</p>
+              <p className="font-semibold text-slate-900">
+                {dateRange === 'all' && 'За все время наблюдений'}
+                {dateRange === '30days' && 'Последние 30 календарных дней'}
+                {dateRange === 'custom' && `Интервал: ${customStart || '...'} по ${customEnd || '...'}`}
+              </p>
+              <p className="text-slate-500 text-[11px]">Формат агрегации: Динамический</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Controls Panel */}
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-8 pb-6 border-b border-slate-800/80 gap-4 print:border-b-2 print:border-gray-300">
+          <div>
+            <h2 className="text-lg font-medium text-slate-100 print:text-black">Аналитика подбора</h2>
+            <p className="text-slate-400 text-sm mt-1 print:text-gray-600">Основано на модели IDEF0 и ETL-агрегации</p>
+          </div>
+
+          <div className="flex md:flex-row flex-col items-stretch md:items-center gap-3 print:hidden w-full md:w-auto">
+          {/* Mock Filters */}
+          <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 text-sm text-slate-300 bg-slate-900/80 px-3 py-1.5 rounded-2xl sm:rounded-full border border-slate-800 shadow-sm print:hidden">
+            <Calendar className="w-4 h-4 text-purple-400 ml-2" />
+            <select 
+              className="bg-transparent text-slate-300 outline-none pr-3 py-1 cursor-pointer"
+              value={dateRange}
+              onChange={(e) => setDateRange(e.target.value)}
+            >
+              <option value="all" className="bg-slate-900">За все время</option>
+              <option value="30days" className="bg-slate-900">За 30 дней</option>
+              <option value="custom" className="bg-slate-900">Произвольный период</option>
+            </select>
+            {dateRange === 'custom' && (
+              <div className="flex items-center space-x-2 border-l border-slate-700 pl-3">
+                <input 
+                  type="date" 
+                  value={customStart}
+                  onChange={(e) => setCustomStart(e.target.value)}
+                  className="bg-transparent text-slate-300 outline-none cursor-pointer"
+                />
+                <span className="text-slate-500">-</span>
+                <input 
+                  type="date" 
+                  value={customEnd}
+                  onChange={(e) => setCustomEnd(e.target.value)}
+                  className="bg-transparent text-slate-300 outline-none pr-2 cursor-pointer"
+                />
+              </div>
+            )}
+          </div>
+          <div className="flex items-center space-x-2 text-sm text-slate-300 bg-slate-900/80 pl-4 pr-2 py-1.5 rounded-full border border-slate-800 shadow-sm print:hidden">
+            <Briefcase className="w-4 h-4 text-purple-400" />
+            <select
+              value={selectedVacancy}
+              onChange={(e) => setSelectedVacancy(Number(e.target.value))}
+              className="bg-transparent text-slate-300 outline-none pr-1 cursor-pointer font-medium text-xs sm:text-sm max-w-[170px] truncate"
+            >
+              {vacanciesList.map((v) => (
+                <option key={v.id} value={v.id} className="bg-slate-950 text-slate-300">
+                  {v.title}
+                </option>
+              ))}
+            </select>
+            <button 
+              onClick={() => setShowAddVacancyModal(true)} 
+              className="p-1 hover:bg-slate-800 rounded-full transition-colors group cursor-pointer"
+              title="Добавить новую вакансию"
+            >
+              <Plus className="w-4 h-4 text-slate-400 group-hover:text-purple-400" />
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button 
+              onClick={() => setSimulationModalOpen(true)}
+              className="flex items-center space-x-2 text-sm text-blue-100 bg-blue-600/20 border border-blue-500/30 hover:bg-blue-600/30 transition-colors px-4 py-2 rounded-full"
+              title="Симуляция данных"
+            >
+              <Settings2 className="w-4 h-4 text-blue-400" />
+              <span className="font-medium hidden sm:inline-block">Генерация данных</span>
+            </button>
+            <button 
+              onClick={() => openExportModal('json')}
+              className="flex items-center space-x-2 text-sm text-amber-100 bg-amber-600/20 border border-amber-500/30 hover:bg-amber-600/30 transition-colors px-4 py-2 rounded-full"
+              title="Выгрузить в JSON"
+            >
+              <Database className="w-4 h-4 text-amber-400" />
+              <span className="font-medium hidden sm:inline-block">JSON</span>
+            </button>
+            <button 
+              onClick={() => openExportModal('csv')}
+              className="flex items-center space-x-2 text-sm text-emerald-100 bg-emerald-600/20 border border-emerald-500/30 hover:bg-emerald-600/30 transition-colors px-4 py-2 rounded-full"
+              title="Выгрузить в CSV"
+            >
+              <FileDown className="w-4 h-4 text-emerald-400" />
+              <span className="font-medium hidden sm:inline-block">CSV</span>
+            </button>
+            <button 
+              onClick={() => openExportModal('pdf')}
+              className="flex items-center space-x-2 text-sm text-white bg-purple-600 hover:bg-purple-700 transition-colors px-5 py-2 rounded-full shadow-sm shadow-purple-900/50"
+            >
+              <Download className="w-4 h-4" />
+              <span className="font-medium">Экспорт PDF</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {simulationModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl">
+            <div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center">
+              <h3 className="text-lg font-semibold text-white">
+                Параметры симуляции
+              </h3>
+              <button onClick={() => setSimulationModalOpen(false)} className="text-slate-400 hover:text-white transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="text-sm text-slate-400 mb-4">Вы можете сгенерировать новые данные для демонстрации работы дашборда:</div>
+              
+              <div className="space-y-3">
+                <label className="flex items-center space-x-3 cursor-pointer group p-3 rounded-lg border border-slate-800 hover:border-slate-600 transition-colors">
+                  <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${simulationProfile === 'default' ? 'border-blue-500' : 'border-slate-600'}`}>
+                    {simulationProfile === 'default' && <div className="w-2 h-2 rounded-full bg-blue-500" />}
+                  </div>
+                  <input type="radio" value="default" className="hidden" checked={simulationProfile==='default'} onChange={(e) => setSimulationProfile(e.target.value)} />
+                  <div>
+                    <div className="text-slate-200 text-sm font-medium">Стандартный процесс</div>
+                    <div className="text-slate-500 text-xs">Обычная воронка, средние задержки</div>
+                  </div>
+                </label>
+
+                <label className="flex items-center space-x-3 cursor-pointer group p-3 rounded-lg border border-slate-800 hover:border-slate-600 transition-colors">
+                  <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${simulationProfile === 'strict' ? 'border-blue-500' : 'border-slate-600'}`}>
+                    {simulationProfile === 'strict' && <div className="w-2 h-2 rounded-full bg-blue-500" />}
+                  </div>
+                  <input type="radio" value="strict" className="hidden" checked={simulationProfile==='strict'} onChange={(e) => setSimulationProfile(e.target.value)} />
+                  <div>
+                    <div className="text-slate-200 text-sm font-medium">Сильный отсев</div>
+                    <div className="text-slate-500 text-xs">Много кандидатов, огромный отсев на скрининге</div>
+                  </div>
+                </label>
+
+                <label className="flex items-center space-x-3 cursor-pointer group p-3 rounded-lg border border-slate-800 hover:border-slate-600 transition-colors">
+                  <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${simulationProfile === 'fast' ? 'border-blue-500' : 'border-slate-600'}`}>
+                    {simulationProfile === 'fast' && <div className="w-2 h-2 rounded-full bg-blue-500" />}
+                  </div>
+                  <input type="radio" value="fast" className="hidden" checked={simulationProfile==='fast'} onChange={(e) => setSimulationProfile(e.target.value)} />
+                  <div>
+                    <div className="text-slate-200 text-sm font-medium">Быстрый найм (Fast-track)</div>
+                    <div className="text-slate-500 text-xs">Очень быстрые переходы между этапами, мало отказов</div>
+                  </div>
+                </label>
+                
+                <label className="flex items-center space-x-3 cursor-pointer group p-3 rounded-lg border border-slate-800 hover:border-slate-600 transition-colors">
+                  <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${simulationProfile === 'ideal' ? 'border-blue-500' : 'border-slate-600'}`}>
+                    {simulationProfile === 'ideal' && <div className="w-2 h-2 rounded-full bg-blue-500" />}
+                  </div>
+                  <input type="radio" value="ideal" className="hidden" checked={simulationProfile==='ideal'} onChange={(e) => setSimulationProfile(e.target.value)} />
+                  <div>
+                    <div className="text-slate-200 text-sm font-medium">Идеальная воронка</div>
+                    <div className="text-slate-500 text-xs">100 кандидатов, 50 офферов (50% общая конверсия)</div>
+                  </div>
+                </label>
+              </div>
+
+            </div>
+            <div className="px-6 py-4 border-t border-slate-800 flex justify-end space-x-3 bg-slate-900/50">
+              <button onClick={() => setSimulationModalOpen(false)} className="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition-colors">
+                Отмена
+              </button>
+              <button 
+                onClick={handleSimulate}
+                className="px-5 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors flex items-center"
+              >
+                <Database className="w-4 h-4 mr-2" />
+                Сгенерировать
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAddVacancyModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl">
+            <div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center bg-slate-950/40">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200">
+                Новая вакансия
+              </h3>
+              <button onClick={() => setShowAddVacancyModal(false)} className="text-slate-400 hover:text-white transition-colors cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleAddVacancy}>
+              <div className="p-6 space-y-4">
+                <div className="space-y-1">
+                  <label className="text-xs text-slate-400 font-medium">Название вакансии (job_title)</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="E.g., Senior QA Automation Engineer"
+                    value={newVacancyTitle}
+                    onChange={(e) => setNewVacancyTitle(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 text-sm rounded-lg p-2.5 text-slate-200 outline-none focus:ring-1 focus:ring-purple-600 focus:border-purple-600 transition-all font-sans"
+                  />
+                </div>
+              </div>
+              <div className="px-6 py-4 border-t border-slate-800 flex justify-end space-x-3 bg-slate-950/20">
+                <button type="button" onClick={() => setShowAddVacancyModal(false)} className="px-4 py-2 text-xs font-semibold text-slate-400 hover:text-white transition-colors cursor-pointer">
+                  Отмена
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 text-xs font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-550 transition-colors shadow-lg shadow-purple-600/10 cursor-pointer"
+                >
+                  Создать вакансию
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showAddCandidateModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl">
+            <div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center bg-slate-950/40">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200">
+                Добавить кандидата
+              </h3>
+              <button onClick={() => setShowAddCandidateModal(false)} className="text-slate-400 hover:text-white transition-colors cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleAddCandidate}>
+              <div className="p-6 space-y-4">
+                <div className="space-y-1">
+                  <label className="text-xs text-slate-400 font-medium font-sans">ФИО Кандидата</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Иванов Иван Иванович"
+                    value={newCandidateName}
+                    onChange={(e) => setNewCandidateName(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 text-sm rounded-lg p-2.5 text-slate-200 outline-none focus:ring-1 focus:ring-purple-600 focus:border-purple-600 transition-all font-sans"
+                  />
+                </div>
+                
+                <div className="space-y-1">
+                  <label className="text-xs text-slate-400 font-medium font-sans">Номер телефона</label>
+                  <input
+                    type="text"
+                    placeholder="+7 (999) 000-00-00"
+                    value={newCandidatePhone}
+                    onChange={(e) => setNewCandidatePhone(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 text-sm rounded-lg p-2.5 text-slate-200 outline-none focus:ring-1 focus:ring-purple-600 focus:border-purple-600 transition-all font-sans"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs text-slate-400 font-medium font-sans">Источник привлечения</label>
+                  <select
+                    value={newCandidateSource}
+                    onChange={(e) => setNewCandidateSource(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 text-sm rounded-lg p-2.5 text-slate-200 outline-none focus:ring-1 focus:ring-purple-600 focus:border-purple-600 transition-all font-sans"
+                  >
+                    <option value="HeadHunter">HeadHunter</option>
+                    <option value="Habr Career">Хабр Карьера</option>
+                    <option value="Referral">Рекомендация</option>
+                    <option value="Telegram">Telegram канал/чат</option>
+                    <option value="In-house sourcing">Прямой хантинг</option>
+                  </select>
+                </div>
+              </div>
+              <div className="px-6 py-4 border-t border-slate-800 flex justify-end space-x-3 bg-slate-950/20">
+                <button type="button" onClick={() => setShowAddCandidateModal(false)} className="px-4 py-2 text-xs font-semibold text-slate-400 hover:text-white transition-colors cursor-pointer">
+                  Отмена
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 text-xs font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-550 transition-colors shadow-lg shadow-purple-600/10 cursor-pointer"
+                >
+                  Добавить в воронку
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {exportModalState.isOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl">
+            <div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center">
+              <h3 className="text-lg font-semibold text-white">
+                Настройки экспорта ({exportModalState.format === 'csv' ? 'CSV' : 'PDF'})
+              </h3>
+              <button onClick={closeExportModal} className="text-slate-400 hover:text-white transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="text-sm text-slate-400 mb-4">Выберите данные, которые необходимо экспортировать в {exportModalState.format.toUpperCase()} файл:</div>
+              
+              <label className="flex items-center space-x-3 cursor-pointer group">
+                <div className={`w-5 h-5 rounded flex items-center justify-center border transition-colors ${exportConfig.includeFunnel ? 'bg-purple-600 border-purple-600' : 'bg-slate-800 border-slate-700 group-hover:border-slate-500'}`}>
+                  {exportConfig.includeFunnel && <Check className="w-3.5 h-3.5 text-white" />}
+                </div>
+                <input type="checkbox" className="hidden" checked={exportConfig.includeFunnel} onChange={() => setExportConfig({...exportConfig, includeFunnel: !exportConfig.includeFunnel})} />
+                <span className="text-slate-200">Воронка кандидатов (этапы и конверсия)</span>
+              </label>
+
+              <label className="flex items-center space-x-3 cursor-pointer group">
+                <div className={`w-5 h-5 rounded flex items-center justify-center border transition-colors ${exportConfig.includeDelays ? 'bg-purple-600 border-purple-600' : 'bg-slate-800 border-slate-700 group-hover:border-slate-500'}`}>
+                  {exportConfig.includeDelays && <Check className="w-3.5 h-3.5 text-white" />}
+                </div>
+                <input type="checkbox" className="hidden" checked={exportConfig.includeDelays} onChange={() => setExportConfig({...exportConfig, includeDelays: !exportConfig.includeDelays})} />
+                <span className="text-slate-200">Временные задержки (SLA)</span>
+              </label>
+
+              <label className="flex items-center space-x-3 cursor-pointer group">
+                <div className={`w-5 h-5 rounded flex items-center justify-center border transition-colors ${exportConfig.includeInsights ? 'bg-purple-600 border-purple-600' : 'bg-slate-800 border-slate-700 group-hover:border-slate-500'}`}>
+                  {exportConfig.includeInsights && <Check className="w-3.5 h-3.5 text-white" />}
+                </div>
+                <input type="checkbox" className="hidden" checked={exportConfig.includeInsights} onChange={() => setExportConfig({...exportConfig, includeInsights: !exportConfig.includeInsights})} />
+                <span className="text-slate-200">AI-Инсайты и Аналитика</span>
+              </label>
+
+              {exportModalState.format === 'csv' && (
+                <label className="flex items-center space-x-3 cursor-pointer group">
+                  <div className={`w-5 h-5 rounded flex items-center justify-center border transition-colors ${exportConfig.rawCandidates ? 'bg-purple-600 border-purple-600' : 'bg-slate-800 border-slate-700 group-hover:border-slate-500'}`}>
+                    {exportConfig.rawCandidates && <Check className="w-3.5 h-3.5 text-white" />}
+                  </div>
+                  <input type="checkbox" className="hidden" checked={exportConfig.rawCandidates} onChange={() => setExportConfig({...exportConfig, rawCandidates: !exportConfig.rawCandidates})} />
+                  <span className="text-slate-200">Сырые логи кандидатов</span>
+                </label>
+              )}
+            </div>
+            <div className="px-6 py-4 border-t border-slate-800 flex justify-end space-x-3 bg-slate-900/50">
+              <button onClick={closeExportModal} className="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition-colors">
+                Отмена
+              </button>
+              <button 
+                onClick={processExport}
+                className="px-5 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors flex items-center"
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Сформировать {exportModalState.format.toUpperCase()}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {integrationModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl">
+            <div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center">
+              <h3 className="text-lg font-semibold text-white flex items-center">
+                <Code className="w-5 h-5 text-blue-400 mr-2" />
+                Интеграция модуля
+              </h3>
+              <button onClick={() => setIntegrationModalOpen(false)} className="text-slate-400 hover:text-white transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-0">
+                <div className="flex border-b border-slate-800">
+                  <div 
+                    onClick={() => setIntegrationTab('iframe')}
+                    className={`flex-1 py-3 px-4 flex items-center justify-center text-sm font-medium cursor-pointer transition-colors ${integrationTab === 'iframe' ? 'text-blue-400 border-b-2 border-blue-500 bg-blue-500/10' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'}`}
+                  >
+                     <Link className="w-4 h-4 mr-2" />
+                     Iframe Встраивание
+                  </div>
+                  <div 
+                    onClick={() => setIntegrationTab('api')}
+                    className={`flex-1 py-3 px-4 flex items-center justify-center text-sm font-medium cursor-pointer transition-colors ${integrationTab === 'api' ? 'text-emerald-400 border-b-2 border-emerald-500 bg-emerald-500/10' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'}`}
+                  >
+                     <Cpu className="w-4 h-4 mr-2" />
+                     REST API / Токен
+                  </div>
+                  <div 
+                    onClick={() => setIntegrationTab('webhooks')}
+                    className={`flex-1 py-3 px-4 flex items-center justify-center text-sm font-medium cursor-pointer transition-colors ${integrationTab === 'webhooks' ? 'text-amber-400 border-b-2 border-amber-500 bg-amber-500/10' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'}`}
+                  >
+                     <Database className="w-4 h-4 mr-2" />
+                     Webhooks
+                  </div>
+               </div>
+               
+               <div className="p-6">
+                 {integrationTab === 'iframe' && (
+                   <div className="animate-in fade-in zoom-in-95 duration-200">
+                     <h4 className="text-slate-200 font-medium mb-2 text-sm">HTML-код для встраивания</h4>
+                     <p className="text-slate-400 text-xs mb-4">
+                        Скопируйте данный код и вставьте его на любую страницу вашего корпоративного портала (например, Bitrix24, Confluence или внутренний сайт), чтобы отобразить этот дашборд.
+                     </p>
+                     <div className="relative group">
+                       <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                         <button className="bg-slate-700 hover:bg-slate-600 p-1.5 rounded flex items-center text-xs text-white" onClick={() => alert('Код скопирован!')}>
+                            <Copy className="w-3 h-3 mr-1" /> Скопировать
+                         </button>
+                       </div>
+<pre className="bg-slate-950 p-4 rounded-xl border border-slate-800 overflow-x-auto text-[11px] text-emerald-400 font-mono">
+{`<iframe 
+  src="${window.location.origin}" 
+  width="100%" 
+  height="800px" 
+  style="border: none; border-radius: 12px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);"
+  allow="clipboard-write"
+  title="Аналитика найма"
+></iframe>`}
+</pre>
+                     </div>
+                     
+                     <div className="mt-6 bg-blue-900/20 border border-blue-800/50 p-4 rounded-xl">
+                       <h4 className="text-blue-300 font-medium text-sm flex items-center mb-1">
+                         <Info className="w-4 h-4 mr-1.5" />
+                         Требования политики безопасности (CORS)
+                       </h4>
+                       <p className="text-slate-400 text-xs">
+                         Убедитесь, что CSP (Content Security Policy) вашего сайта разрешает загрузку фреймов с текущего домена. Для включения кросс-доменной авторизации обратитесь к администратору сервера.
+                       </p>
+                     </div>
+                   </div>
+                 )}
+
+                 {integrationTab === 'api' && (
+                   <div className="animate-in fade-in zoom-in-95 duration-200">
+                     <h4 className="text-slate-200 font-medium mb-2 text-sm">Генерация API-токена</h4>
+                     <p className="text-slate-400 text-xs mb-4">
+                        Уникальный токен доступа позволяет сторонним сервисам безопасно обращаться к REST API нашего аналитического модуля для получения данных напрямую.
+                     </p>
+
+                     <div className="bg-slate-900 border border-slate-700 p-5 rounded-xl mb-6">
+                       {!apiToken ? (
+                         <div className="text-center py-4">
+                           <button 
+                             onClick={generateApiToken}
+                             className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2 rounded-lg font-medium transition-colors inline-flex items-center text-sm shadow-lg shadow-emerald-900/20"
+                           >
+                             <Cpu className="w-4 h-4 mr-2" /> Сгенерировать токен доступа
+                           </button>
+                         </div>
+                       ) : (
+                         <div>
+                           <div className="text-xs text-slate-400 mb-1.5 uppercase font-medium tracking-wider">Ваш новый токен:</div>
+                           <div className="flex gap-2">
+                             <input 
+                               type="text" 
+                               value={apiToken}
+                               readOnly
+                               className="flex-1 bg-slate-950 border border-emerald-500/50 rounded-lg px-4 py-2.5 text-emerald-400 font-mono text-sm outline-none w-full shadow-inner"
+                             />
+                             <button className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 rounded-lg font-medium transition-colors inline-flex items-center text-sm shadow-md" onClick={() => alert('Токен скопирован!')}>
+                                <Copy className="w-4 h-4" />
+                             </button>
+                           </div>
+                           <p className="text-amber-400/80 text-xs mt-3 flex items-start">
+                             <AlertTriangle className="w-4 h-4 mr-1.5 flex-shrink-0" />
+                             Надежно сохраните этот токен. При его утере вам придется сгенерировать новый и обновить все интеграции.
+                           </p>
+                         </div>
+                       )}
+                     </div>
+
+                     <div className="bg-slate-800/50 border border-slate-700/50 p-5 rounded-xl relative overflow-hidden">
+                       <div className="absolute top-0 right-0 bg-slate-700 text-slate-300 text-[10px] uppercase font-bold tracking-widest px-3 py-1 rounded-bl-lg">Инструкция администратора</div>
+                       
+
+
+                       <h5 className="text-slate-200 font-medium text-sm mb-3">Настройка XAMPP:</h5>
+                       <ol className="list-decimal pl-4 space-y-2 text-slate-400 text-xs leading-relaxed">
+                         <li>Откройте файл конфигурации Apache в вашей установке XAMPP <code>C:\xampp\apache\conf\httpd.conf</code> (путь по умолчанию).</li>
+                         <li>Убедитесь, что модуль <code>mod_setenvif</code> включен (уберите # в начале строки <code>LoadModule setenvif_module modules/mod_setenvif.so</code>).</li>
+                         <li>Добавьте в ваш блок <code>&lt;VirtualHost&gt;</code> или в файл <code>.htaccess</code> следующее правило для проверки заголовка:
+                           <pre className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 my-1 mt-2 text-[#a5d6ff] font-mono text-[10px]">
+SetEnvIf Authorization "^Bearer ${apiToken || 'ВАШ_СГЕНЕРИРОВАННЫЙ_ТОКЕН'}$" valid_token<br/>
+Order Deny,Allow<br/>
+Deny from all<br/>
+Allow from env=valid_token
+                           </pre>
+                         </li>
+                         <li>Перезапустите Apache через панель управления XAMPP, чтобы применить настройки.</li>
+                         <li>Теперь ваши интеграции могут отправлять GET-запросы на <code>{window.location.origin}/api/analytics/funnel</code>, передавая в заголовках: <code className="bg-slate-900 border border-slate-700 px-1 py-0.5 rounded text-emerald-400 font-mono whitespace-nowrap">Authorization: Bearer ТОКЕН</code></li>
+                       </ol>
+
+                     </div>
+                   </div>
+                 )}
+
+                  {integrationTab === 'webhooks' && (
+                    <div className="animate-in fade-in zoom-in-95 duration-200 text-slate-300 mb-6 border-b border-slate-800 pb-6">
+                      <h4 className="text-slate-200 font-medium mb-1 text-sm">Управление Webhooks-оповещениями</h4>
+                      <p className="text-slate-400 text-xs mb-4">
+                         Webhooks позволяют автоматически информировать ваши сторонние системы (например, Bitrix24, Telegram-боты или внутренние CRM-системы на XAMPP) в режиме реального времени о ключевых действиях рекрутера.
+                      </p>
+
+                      <div className="space-y-4 bg-slate-900 border border-slate-700/80 p-5 rounded-xl mb-4">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Target URL (Адрес назначения)</label>
+                          <input 
+                            type="text" 
+                            value={webhookUrl}
+                            onChange={(e) => setWebhookUrl(e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-700 focus:border-amber-500/50 rounded-lg px-3 py-2 text-slate-200 font-mono text-xs outline-none transition-colors"
+                            placeholder="https://your-domain.company.com/webhook"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">События для триггера</label>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <label className="flex items-center space-x-2.5 cursor-pointer text-xs">
+                              <input 
+                                type="checkbox" 
+                                checked={webhookEvents.candidateCreated}
+                                onChange={(e) => setWebhookEvents({...webhookEvents, candidateCreated: e.target.checked})}
+                                className="accent-amber-500"
+                              />
+                              <span>Новый отклик кандидата</span>
+                            </label>
+                            <label className="flex items-center space-x-2.5 cursor-pointer text-xs">
+                              <input 
+                                type="checkbox" 
+                                checked={webhookEvents.stageChanged}
+                                onChange={(e) => setWebhookEvents({...webhookEvents, stageChanged: e.target.checked})}
+                                className="accent-amber-500"
+                              />
+                              <span>Смена этапа отбора (Transition)</span>
+                            </label>
+                            <label className="flex items-center space-x-2.5 cursor-pointer text-xs">
+                              <input 
+                                type="checkbox" 
+                                checked={webhookEvents.offerAccepted}
+                                onChange={(e) => setWebhookEvents({...webhookEvents, offerAccepted: e.target.checked})}
+                                className="accent-amber-500"
+                              />
+                              <span>Выставление и принятие оффера</span>
+                            </label>
+                            <label className="flex items-center space-x-2.5 cursor-pointer text-xs">
+                              <input 
+                                type="checkbox" 
+                                checked={webhookEvents.candidateRejected}
+                                onChange={(e) => setWebhookEvents({...webhookEvents, candidateRejected: e.target.checked})}
+                                className="accent-amber-500"
+                              />
+                              <span>Отказ / Дисквалификация</span>
+                            </label>
+                          </div>
+                        </div>
+
+                        <div className="pt-2 border-t border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <span className="text-[11px] text-slate-400">Payload Format: <code className="text-amber-400 font-mono">application/json</code> (POST)</span>
+                          <button 
+                            onClick={async () => {
+                              if (!webhookUrl) return;
+                              setTestWebhookStatus('sending');
+                              setTestWebhookResult('');
+                              try {
+                                const mockPayload = {
+                                  event: "candidate.stage_changed",
+                                  timestamp: new Date().toISOString(),
+                                  data: {
+                                    id_candidate: 98112,
+                                    name: "Иванов Игорь Игоревич",
+                                    vacancy: "Senior React Developer",
+                                    old_stage: "HR-интервью",
+                                    new_stage: "Тестовое задание",
+                                    updated_by: "Recruiter"
+                                  }
+                                };
+                                
+                                const response = await fetch('/api/analytics/test-webhook', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ url: webhookUrl, payload: mockPayload })
+                                });
+                                
+                                const data = await response.json();
+                                if (response.ok && data.success) {
+                                   setTestWebhookStatus('success');
+                                   setTestWebhookResult(`HTTP ${data.status} — Тестовое событие доставлено! Ответ сервера: ${data.response || 'No response body'}`);
+                                } else {
+                                   setTestWebhookStatus('error');
+                                   setTestWebhookResult(`Не удалось доставить: ${data.error || 'Ответ со статусом ' + data.status}`);
+                                }
+                              } catch (err: any) {
+                                setTestWebhookStatus('error');
+                                setTestWebhookResult(`Сетевая ошибка отправки: ${err.message}`);
+                              }
+                            }}
+                            disabled={testWebhookStatus === 'sending'}
+                            className="px-4 py-1.5 text-xs font-semibold text-slate-900 bg-amber-400 hover:bg-amber-500 rounded transition-colors disabled:opacity-50"
+                          >
+                            {testWebhookStatus === 'sending' ? 'Отправка...' : 'Отправить Тестовый Webhook'}
+                          </button>
+                        </div>
+                        
+                        {testWebhookStatus !== 'idle' && (
+                          <div className={`p-3 rounded-lg text-xs font-mono border ${
+                            testWebhookStatus === 'success' ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-400' : 
+                            testWebhookStatus === 'sending' ? 'bg-slate-900 border-slate-700 text-slate-400' :
+                            'bg-red-950/40 border-red-500/30 text-red-400'
+                          }`}>
+                            {testWebhookResult || 'Соединение с сервером...'}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="bg-slate-800/40 border border-slate-700/50 p-4 rounded-xl">
+                        <h5 className="text-slate-200 font-medium text-xs mb-1.5 uppercase tracking-wider">Пример Payload-запроса</h5>
+                        <pre className="bg-slate-950 p-3 rounded-lg border border-slate-800 text-[#a5d6ff] font-mono text-[10px] overflow-x-auto max-h-36">
+{`{
+  "event": "candidate.stage_changed",
+  "timestamp": "2026-06-08T21:24:00Z",
+  "data": {
+    "id_candidate": 98112,
+    "name": "Иванов Игорь Игоревич",
+    "old_stage": "HR-интервью",
+    "new_stage": "Тестовое задание",
+    "updated_by": "Recruiter"
+  }
+}`}
+                        </pre>
+                      </div>
+                    </div>
+                  )}
+               </div>
+            </div>
+            <div className="px-6 py-4 border-t border-slate-800 bg-slate-900/50 text-right">
+              <button 
+                onClick={() => setIntegrationModalOpen(false)}
+                className="px-5 py-2 text-sm font-medium text-white bg-slate-700 rounded-lg hover:bg-slate-600 transition-colors"
+              >
+                Закрыть
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {shareModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className={`${theme === 'dark' ? 'bg-[#111827] border-slate-800' : 'bg-white border-slate-200'} border rounded-2xl w-full max-w-md overflow-hidden shadow-2xl transition-all`}>
+            {/* Header */}
+            <div className={`px-6 py-4 border-b ${theme === 'dark' ? 'border-slate-800' : 'border-slate-200'} flex justify-between items-center`}>
+              <h3 className={`text-lg font-semibold ${theme === 'dark' ? 'text-white' : 'text-slate-900'} flex items-center`}>
+                <QrCode className="w-5 h-5 text-purple-500 mr-2" />
+                Поделиться макетом
+              </h3>
+              <button onClick={() => setShareModalOpen(false)} className="text-slate-400 hover:text-slate-200 transition-colors cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            {/* Content */}
+            <div className="p-6">
+              {/* Tabs */}
+              <div className={`flex rounded-lg p-1 mb-5 ${theme === 'dark' ? 'bg-slate-950/60' : 'bg-slate-100'}`}>
+                <button
+                  onClick={() => setShareTab('current')}
+                  className={`flex-1 py-1.5 rounded-md text-[11px] font-medium transition-all cursor-pointer ${
+                    shareTab === 'current'
+                      ? theme === 'dark' ? 'bg-purple-600 text-white shadow-md' : 'bg-white text-purple-600 shadow-sm border border-slate-200/40'
+                      : 'text-slate-400 hover:text-slate-650'
+                  }`}
+                >
+                  Текущий адрес (Авто)
+                </button>
+                <button
+                  onClick={() => setShareTab('preview')}
+                  className={`flex-1 py-1.5 rounded-md text-[11px] font-medium transition-all cursor-pointer ${
+                    shareTab === 'preview'
+                      ? theme === 'dark' ? 'bg-purple-600 text-white shadow-md' : 'bg-white text-purple-600 shadow-sm border border-slate-200/40'
+                      : 'text-slate-400 hover:text-slate-650'
+                  }`}
+                >
+                  Основной стенд
+                </button>
+                <button
+                  onClick={() => setShareTab('dev')}
+                  className={`flex-1 py-1.5 rounded-md text-[11px] font-medium transition-all cursor-pointer ${
+                    shareTab === 'dev'
+                      ? theme === 'dark' ? 'bg-purple-600 text-white shadow-md' : 'bg-white text-purple-600 shadow-sm border border-slate-200/40'
+                      : 'text-slate-400 hover:text-slate-650'
+                  }`}
+                >
+                  Резервный сервер
+                </button>
+              </div>
+
+              {/* Informative notice per tab */}
+              <div className={`px-3 py-2 rounded-lg border mb-5 text-[11px] leading-relaxed ${
+                theme === 'dark' ? 'bg-slate-900/50 border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-600'
+              }`}>
+                {shareTab === 'current' && (
+                  <span>🌎 <strong>Определено автоматически:</strong> Этот адрес ведёт прямо на текущую сборку сервиса. Идеально подходит для мгновенного доступа без дополнительных окон.</span>
+                )}
+                {shareTab === 'preview' && (
+                  <span>🌐 <strong>Основной сетевой адрес:</strong> Стабильный глобальный URL для демонстрации выполненного проекта и проверки интерфейса во внешней сети.</span>
+                )}
+                {shareTab === 'dev' && (
+                  <span>📡 <strong>Альтернативный хост:</strong> Дополнительная точка доступа для параллельной проверки стабильности и распределения нагрузки.</span>
+                )}
+              </div>
+
+              {/* QR Image Frame */}
+              <div className="flex flex-col items-center justify-center mb-5">
+                <div className={`p-4 rounded-2xl border ${theme === 'dark' ? 'bg-white border-slate-800 shadow-inner' : 'bg-slate-50 border-slate-200'} flex items-center justify-center mb-3 relative overflow-hidden group`}>
+                  {qrCodeDataUrl ? (
+                    <img
+                      src={qrCodeDataUrl}
+                      alt="QR Code"
+                      className="w-44 h-44 block rounded-lg select-none"
+                    />
+                  ) : (
+                    <div className="w-44 h-44 flex items-center justify-center">
+                      <span className="text-xs text-slate-400 font-mono">Генерация QR...</span>
+                    </div>
+                  )}
+                </div>
+                <p className={`text-center text-xs max-w-xs leading-relaxed ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
+                  Считайте код телефоном для комфортного теста адаптивности
+                </p>
+              </div>
+
+              {/* Copy URL Row */}
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-mono uppercase tracking-wider text-slate-500">
+                  {shareTab === 'current' ? 'ТЕКУЩИЙ СЕТЕВОЙ АДРЕС' : shareTab === 'preview' ? 'АДРЕС ОСНОВНОГО СТЕНДА' : 'АДРЕС РЕЗЕРВНОГО СЕРВЕРА'}
+                </label>
+                <div className="flex space-x-2">
+                  <div className={`flex-1 px-3.5 py-2.5 rounded-lg border font-mono text-[11px] truncate select-all ${
+                    theme === 'dark' 
+                      ? 'bg-slate-950/60 border-slate-850 text-emerald-400' 
+                      : 'bg-slate-50 border-slate-200 text-emerald-700'
+                  }`}>
+                    {shareTab === 'current' 
+                      ? (typeof window !== 'undefined' ? window.location.origin : '')
+                      : shareTab === 'preview' 
+                        ? 'https://ais-pre-4uf4zmbn25sf2botd4u2gv-739155371727.europe-west2.run.app' 
+                        : 'https://ais-dev-4uf4zmbn25sf2botd4u2gv-739155371727.europe-west2.run.app'}
+                  </div>
+                  <button
+                    onClick={() => handleCopyLink(
+                      shareTab === 'current'
+                        ? (typeof window !== 'undefined' ? window.location.origin : '')
+                        : shareTab === 'preview' 
+                          ? 'https://ais-pre-4uf4zmbn25sf2botd4u2gv-739155371727.europe-west2.run.app' 
+                          : 'https://ais-dev-4uf4zmbn25sf2botd4u2gv-739155371727.europe-west2.run.app',
+                      shareTab
+                    )}
+                    className={`px-4 rounded-lg flex items-center justify-center text-xs font-medium transition-all duration-200 cursor-pointer ${
+                      copiedLink === shareTab
+                        ? 'bg-emerald-500 text-white'
+                        : theme === 'dark' ? 'bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white' : 'bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-750'
+                    }`}
+                  >
+                    {copiedLink === shareTab ? (
+                      <span className="flex items-center space-x-1">
+                        <Check className="w-4 h-4" />
+                        <span>Готово!</span>
+                      </span>
+                    ) : (
+                      <span className="flex items-center space-x-1">
+                        <Copy className="w-4 h-4" />
+                        <span>Копировать</span>
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className={`px-6 py-4 border-t ${theme === 'dark' ? 'border-slate-800 bg-slate-900/50' : 'border-slate-200 bg-slate-50'} text-right`}>
+              <button 
+                onClick={() => setShareModalOpen(false)}
+                className={`px-5 py-2 text-sm font-medium rounded-lg transition-colors cursor-pointer ${
+                  theme === 'dark' ? 'bg-slate-800 hover:bg-slate-700 text-white' : 'bg-slate-200 hover:bg-slate-300 text-slate-850'
+                }`}
+              >
+                Закрыть
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {dbNotification && (
+        <div className={`mb-6 p-4 rounded-xl border flex items-center gap-3 transition-all animate-fade-in ${
+          dbNotification.type === 'success' 
+            ? 'bg-emerald-950/50 border-emerald-500/30 text-emerald-300' 
+            : 'bg-red-950/50 border-red-500/30 text-red-300'
+        }`}>
+          {dbNotification.type === 'success' ? (
+            <CheckCircle className="w-5 h-5 text-emerald-400 flex-shrink-0" />
+          ) : (
+            <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0" />
+          )}
+          <span className="text-xs sm:text-sm font-medium">{dbNotification.message}</span>
+        </div>
+      )}
+
+      {/* KPI Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8 print:grid-cols-3">
+        <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm transition-all hover:bg-slate-900 print:bg-gray-50 print:border-gray-200">
+          <div className="text-[11px] text-slate-400 uppercase tracking-widest mb-3 font-mono print:text-gray-500">ВСЕГО ОТКЛИКОВ</div>
+          <div className="text-4xl font-semibold text-white tracking-tight print:text-black">
+            {loading ? <span className="opacity-50">...</span> : totalApplicants}
+          </div>
+          <div className="mt-3 text-sm text-slate-500 flex items-center print:text-gray-600">
+            <Users className="w-4 h-4 mr-2" />
+            кандидатов в воронке
+          </div>
+        </div>
+        
+        <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm transition-all hover:bg-slate-900 print:bg-gray-50 print:border-gray-200">
+          <div className="text-[11px] text-slate-400 uppercase tracking-widest mb-3 font-mono print:text-gray-500">НА ЭТАПЕ ОФФЕРА</div>
+          <div className="text-4xl font-semibold text-purple-400 tracking-tight">
+            {loading ? <span className="opacity-50 text-slate-600">...</span> : hiredCount}
+          </div>
+          <div className="mt-3 text-sm text-purple-400/60 flex items-center print:text-purple-600">
+            <span className="w-2 h-2 rounded-full bg-purple-500 mr-2 animate-pulse print:hidden"></span>
+            кандидат
+          </div>
+        </div>
+
+        <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm transition-all hover:bg-slate-900 print:bg-gray-50 print:border-gray-200 flex flex-col justify-between">
+          <div>
+            <div className="text-[11px] text-slate-400 uppercase tracking-widest mb-3 font-mono print:text-gray-500">БАЗА ДАННЫХ XAMPP</div>
+            <div className={`text-2xl font-semibold tracking-tight flex items-center gap-2 ${dbStatus.connected ? 'text-emerald-400' : 'text-amber-400'}`}>
+              <span className={`w-3 h-3 rounded-full ${dbStatus.connected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+              {dbStatus.connected ? 'XAMPP MySQL' : 'Имитация (Offline)'}
+            </div>
+            <div className="mt-1 text-xs text-slate-400 font-mono">
+              {dbStatus.connected ? 'Режим: АКТИВНА (ВКР база)' : 'Режим: ИМИТАЦИЯ (БД OFFLINE)'}
+            </div>
+          </div>
+          <div className="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between gap-2 print:hidden">
+            <span className="text-[10px] text-slate-500 uppercase tracking-wider font-mono">VKR-DB-GATEWAY</span>
+            <button 
+              disabled={isImporting}
+              onClick={handleImportDatabase}
+              className={`text-xs px-2.5 py-1.5 rounded-lg border font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${
+                isImporting 
+                  ? 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed'
+                  : 'bg-purple-600/10 hover:bg-purple-600/20 border-purple-500/30 text-purple-300'
+              }`}
+            >
+              <RefreshCw className={`w-3 h-3 ${isImporting ? 'animate-spin' : ''}`} />
+              {isImporting ? 'Импорт...' : 'Импортировать СУБД'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Analytical Insights Panel */}
+      <div className={`mb-10 bg-slate-900/40 border border-slate-800/80 rounded-2xl p-5 ${exportConfig.includeInsights ? '' : 'print:hidden'}`}>
+        <div className="flex items-center mb-4">
+          <Activity className="w-5 h-5 text-blue-400 mr-2" />
+          <h3 className="text-sm font-medium text-slate-200">Автоматический анализ отклонений</h3>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {loading ? (
+             <div className="col-span-full py-4 text-center text-slate-500 text-sm">Система анализирует воронку...</div>
+          ) : insights.length > 0 ? (
+            insights.map((insight, idx) => (
+              <div key={idx} className={`p-4 rounded-xl border ${insight.color}`}>
+                <div className="flex items-start">
+                  {insight.icon}
+                  <div>
+                    <h4 className="text-sm font-semibold mb-1 w-full">{insight.title}</h4>
+                    <p className="text-xs leading-relaxed opacity-90">{insight.text}</p>
+                  </div>
+                </div>
+              </div>
+            ))
+          ) : (
+             <div className="col-span-full py-4 text-center text-slate-500 text-sm">Недостаточно данных для анализа</div>
+          )}
+        </div>
+      </div>
+
+      {/* Charts Area View Toggle */}
+      <div className="flex justify-end mb-4 print:hidden">
+        <div className="bg-slate-900/60 p-1 rounded-lg border border-slate-800 flex items-center">
+          <button 
+            onClick={() => setChartType('recharts')} 
+            className={`px-4 py-1.5 text-xs font-medium rounded-md transition-colors ${chartType === 'recharts' ? 'bg-purple-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+          >
+            Воронка (Recharts)
+          </button>
+          <button 
+            onClick={() => setChartType('chartjs')} 
+            className={`px-4 py-1.5 text-xs font-medium rounded-md transition-colors ${chartType === 'chartjs' ? 'bg-purple-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+          >
+            Линейный (Chart.js)
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 mb-8 print:break-inside-avoid">
+        {/* Funnel Chart */}
+        <div className={`bg-slate-900/50 border border-slate-800 rounded-2xl p-6 shadow-xl print:bg-white print:border-none print:shadow-none ${exportConfig.includeFunnel ? '' : 'print:hidden'}`}>
+          <div className="flex items-center justify-between mb-8">
+            <div className="text-sm font-medium text-slate-300 flex items-center print:text-black">
+              <Filter className="w-4 h-4 mr-2.5 text-purple-400 print:hidden" />
+              Данные воронки найма (СУБД MySQL)
+            </div>
+          </div>
+          <div className="h-[420px] w-full">
+            {loading ? (
+              <div className="w-full h-full flex justify-center items-center opacity-50">
+                <Activity className="animate-spin text-purple-500 w-8 h-8" />
+              </div>
+            ) : chartType === 'chartjs' ? (
+              <Bar 
+                options={{
+                  indexAxis: 'y' as const,
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                      callbacks: { label: (ctx) => ` ${ctx.parsed.x} кандидатов` }
+                    }
+                  },
+                  scales: {
+                    x: { grid: { color: theme === 'dark' ? '#1e293b' : '#e2e8f0' }, ticks: { color: theme === 'dark' ? '#94a3b8' : '#475569' } },
+                    y: { grid: { display: false }, ticks: { color: theme === 'dark' ? '#94a3b8' : '#475569' } }
+                  }
+                }}
+                data={{
+                  labels: funnelData.map(d => d.stage),
+                  datasets: [{
+                    label: 'Кандидатов',
+                    data: funnelData.map(d => d.count),
+                    backgroundColor: funnelData.map((_, i) => COLORS[i % COLORS.length]),
+                    borderRadius: 4,
+                  }]
+                }} 
+              />
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <FunnelChart>
+                  <RechartsTooltip
+                    cursor={{fill: 'transparent'}}
+                    contentStyle={theme === 'dark' ? 
+                      { backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px', color: '#f8fafc', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.5)' } : 
+                      { backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }
+                    }
+                    itemStyle={{ color: theme === 'dark' ? '#fff' : '#0f172a', fontWeight: 500 }}
+                    formatter={(value: number) => [value, "Кандидатов"]}
+                  />
+                  <Funnel
+                    dataKey="count"
+                    data={funnelData}
+                    nameKey="stage"
+                    isAnimationActive
+                    stroke={theme === 'dark' ? '#0b0f19' : '#ffffff'}
+                    strokeWidth={2}
+                  >
+                    <LabelList 
+                      position="right" 
+                      fill={theme === 'dark' ? '#94a3b8' : '#334155'} 
+                      stroke="none" 
+                      dataKey="stage" 
+                      fontSize={12}
+                      offset={20}
+                    />
+                    {funnelData.map((entry, index) => (
+                      <RechartsCell key={'cell-' + index} fill={COLORS[index % COLORS.length]} className="opacity-90 transition-opacity dt-cell print:opacity-100" />
+                    ))}
+                  </Funnel>
+                </FunnelChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
+
+        {/* Delays Chart */}
+        <div className={`bg-slate-900/50 border border-slate-800 rounded-2xl p-6 shadow-xl print:bg-white print:border-none print:shadow-none ${exportConfig.includeDelays ? '' : 'print:hidden'}`}>
+          <div className="flex items-center justify-between mb-8">
+            <div className="text-sm font-medium text-slate-300 flex items-center print:text-black">
+              <Activity className="w-4 h-4 mr-2.5 text-blue-400 print:hidden" />
+              Аналитика временных задержек по этапам (в днях)
+            </div>
+          </div>
+          <div className="h-[420px] w-full pb-6">
+            {loading ? (
+              <div className="w-full h-full flex justify-center items-center opacity-50">
+                <Activity className="animate-spin text-blue-500 w-8 h-8" />
+              </div>
+            ) : chartType === 'chartjs' ? (
+              <Bar 
+                options={{
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                      callbacks: { label: (ctx) => ` ${ctx.parsed.y} дней` }
+                    },
+                    annotation: {
+                      annotations: {
+                        line1: {
+                          type: 'line',
+                          yMin: 3,
+                          yMax: 3,
+                          borderColor: '#ef4444',
+                          borderWidth: 2,
+                          borderDash: [5, 5],
+                          label: {
+                            display: true,
+                            content: 'Норматив SLA (3 дня)',
+                            position: 'end',
+                            backgroundColor: '#ef4444',
+                            color: 'white',
+                            font: { size: 11 }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  scales: {
+                    x: { grid: { display: false }, ticks: { color: theme === 'dark' ? '#94a3b8' : '#475569', maxRotation: 45, minRotation: 45 } },
+                    y: { grid: { color: theme === 'dark' ? '#1e293b' : '#e2e8f0' }, ticks: { color: theme === 'dark' ? '#94a3b8' : '#475569' } }
+                  }
+                }}
+                data={{
+                  labels: delaysData.map(d => d.stage),
+                  datasets: [{
+                    label: 'Дней',
+                    data: delaysData.map(d => d.avg_days),
+                    backgroundColor: delaysData.map(d => d.avg_days > 3.0 ? '#ef4444' : '#3b82f6'),
+                    borderRadius: 4,
+                  }]
+                }}
+              />
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <RechartsBarChart data={delaysData} margin={{ top: 20, right: 30, left: 0, bottom: 40 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={theme === 'dark' ? '#1e293b' : '#e2e8f0'} vertical={false} />
+                  <XAxis 
+                    dataKey="stage" 
+                    stroke="#475569" 
+                    tick={{ fill: theme === 'dark' ? '#94a3b8' : '#475569', fontSize: 11 }} 
+                    angle={-35} 
+                    textAnchor="end" 
+                    interval={0}
+                    tickMargin={10}
+                  />
+                  <YAxis stroke="#475569" tick={{ fill: theme === 'dark' ? '#94a3b8' : '#475569', fontSize: 11 }} allowDecimals={false} />
+                  <RechartsTooltip
+                    cursor={{ fill: theme === 'dark' ? '#1e293b' : '#cbd5e1', opacity: 0.5 }}
+                    contentStyle={theme === 'dark' ? 
+                      { backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px', color: '#f8fafc', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.5)' } : 
+                      { backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }
+                    }
+                    formatter={(value: number) => [value + ' дней', "Ср. время"]}
+                  />
+                  <RechartsRefLine 
+                    y={3} 
+                    label={{ position: 'top', value: 'Норматив SLA (3 дня)', fill: '#ef4444', fontSize: 11, fontWeight: 500 }} 
+                    stroke="#ef4444" 
+                    strokeDasharray="4 4" 
+                    strokeWidth={2}
+                    opacity={0.8}
+                  />
+                  <RechartsBar 
+                    dataKey="avg_days" 
+                    name="Ср. время" 
+                    radius={[6, 6, 0, 0]}
+                    maxBarSize={40}
+                    animationBegin={200}
+                  >
+                    {delaysData.map((entry, index) => (
+                      <RechartsCell key={'delay-cell-' + index} fill={entry.avg_days > 3.0 ? '#ef4444' : '#3b82f6'} className="transition-all duration-300 print:opacity-100" />
+                    ))}
+                  </RechartsBar>
+                </RechartsBarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Data Grid Table */}
+      <div className="bg-slate-900/50 border border-slate-800 rounded-2xl overflow-hidden shadow-xl print:bg-white print:border-gray-200 print:shadow-none print:break-inside-avoid">
+        <div className="px-6 py-5 border-b border-slate-800 flex items-center print:border-gray-200">
+          <FileDown className="w-5 h-5 mr-3 text-emerald-400 print:hidden" />
+          <h2 className="text-lg font-medium text-slate-100 print:text-black">Детализация воронки (Drill-down)</h2>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm text-left">
+            <thead className="text-[11px] uppercase tracking-wider text-slate-400 bg-slate-800/40 print:bg-gray-100 print:text-gray-600">
+              <tr>
+                <th className="px-6 py-4 font-semibold">Этап отбора</th>
+                <th className="px-6 py-4 font-semibold text-right">Кандидатов</th>
+                <th className="px-6 py-4 font-semibold text-right">Отсев</th>
+                <th className="px-6 py-4 font-semibold text-right">Конверсия этапа</th>
+                <th className="px-6 py-4 font-semibold text-right">Ср. время (дни)</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/60 print:divide-gray-200">
+              {detailedData.map((row, i) => (
+                <tr key={'tr-' + i} className="hover:bg-slate-800/20 transition-colors print:text-black">
+                  <td className="px-6 py-4 font-medium text-slate-200 print:text-black">{row.sort}. {row.stage}</td>
+                  <td className="px-6 py-4 text-right font-mono">{row.count}</td>
+                  <td className="px-6 py-4 text-right font-mono text-slate-400">
+                    {i === 0 ? '-' : "-" + row.dropoff}
+                  </td>
+                  <td className="px-6 py-4 text-right font-mono">
+                    <span className={"inline-flex items-center " + (i === 0 ? 'text-slate-400' : 'text-emerald-400')}>
+                      {i === 0 ? '-' : row.conversion + '%'}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-right font-mono">
+                    {row.avg_days > 0 ? (
+                      <span className={row.avg_days > 3.0 ? "text-red-400" : "text-blue-400"}>
+                        {row.avg_days}
+                      </span>
+                    ) : (
+                      <span className="text-slate-500">-</span>
+                    )}
+
+
+
+
+
+
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Candidates Log Table */}
+      <div className="mt-8 bg-slate-900/50 border border-slate-800 rounded-2xl overflow-hidden shadow-xl print:bg-white print:border-gray-200 print:shadow-none print:break-inside-avoid">
+        <div className="px-6 py-5 border-b border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 print:border-gray-200">
+          <div className="flex items-center">
+            <Users className="w-5 h-5 mr-3 text-blue-400 print:hidden" />
+            <h2 className="text-lg font-medium text-slate-100 print:text-black">Журнал учета: Движение кандидатов</h2>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+            <div className="relative flex-1 sm:w-64 print:hidden">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500" />
+              <input 
+                type="text"
+                placeholder="Поиск по имени или вакансии..."
+                className="bg-slate-900 border border-slate-700 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full pl-10 p-2 text-slate-200 outline-none transition-colors"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            </div>
+            
+            <button 
+              onClick={() => setShowAddCandidateModal(true)}
+              className="flex items-center justify-center space-x-1.5 text-xs font-semibold text-white bg-purple-600 hover:bg-purple-550 active:bg-purple-700 transition-colors px-3.5 py-2 rounded-lg cursor-pointer print:hidden flex-shrink-0 shadow-lg shadow-purple-600/15"
+              title="Добавить нового кандидата в воронку"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Добавить кандидата</span>
+            </button>
+
+            <button 
+              onClick={fetchAnalytics}
+              disabled={loading}
+              className="flex items-center justify-center space-x-2 text-xs font-medium text-blue-100 bg-blue-600/20 border border-blue-500/30 hover:bg-blue-600/30 transition-colors px-3 py-2 rounded-lg disabled:opacity-50 print:hidden flex-shrink-0 cursor-pointer"
+              title="Обновить данные"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-blue-400 ${loading ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline-block">Синхронизация</span>
+            </button>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          {/* SCREEN ONLY PAGINATED TABLE */}
+          <table className="w-full text-sm text-left print:hidden">
+            <thead className="text-[11px] uppercase tracking-wider text-slate-400 bg-slate-800/40">
+              <tr>
+                <th 
+                  className={`px-6 py-4 font-semibold cursor-pointer select-none transition-colors group ${theme === 'dark' ? 'hover:bg-slate-800/40' : 'hover:bg-slate-200/60'}`}
+                  onClick={() => handleSort('name')}
+                >
+                  <div className="flex items-center space-x-1.5 justify-start">
+                    <span>ФИО Кандидата</span>
+                    <span>
+                      {sortField === 'name' ? (
+                        sortDirection === 'asc' ? <ArrowUp className="w-3.5 h-3.5 text-purple-400" /> : <ArrowDown className="w-3.5 h-3.5 text-purple-400" />
+                      ) : (
+                        <ArrowUpDown className="w-3.5 h-3.5 text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      )}
+                    </span>
+                  </div>
+                </th>
+                <th className="px-6 py-4 font-semibold hidden lg:table-cell">Телефон</th>
+                <th className="px-6 py-4 font-semibold hidden lg:table-cell">Источник</th>
+                <th 
+                  className={`px-6 py-4 font-semibold cursor-pointer select-none transition-colors group ${theme === 'dark' ? 'hover:bg-slate-800/40' : 'hover:bg-slate-200/60'}`}
+                  onClick={() => handleSort('vacancy')}
+                >
+                  <div className="flex items-center space-x-1.5 justify-start">
+                    <span>Вакансия</span>
+                    <span>
+                      {sortField === 'vacancy' ? (
+                        sortDirection === 'asc' ? <ArrowUp className="w-3.5 h-3.5 text-purple-400" /> : <ArrowDown className="w-3.5 h-3.5 text-purple-400" />
+                      ) : (
+                        <ArrowUpDown className="w-3.5 h-3.5 text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      )}
+                    </span>
+                  </div>
+                </th>
+                <th 
+                  className={`px-6 py-4 font-semibold cursor-pointer select-none transition-colors group ${theme === 'dark' ? 'hover:bg-slate-800/40' : 'hover:bg-slate-200/60'}`}
+                  onClick={() => handleSort('stage')}
+                >
+                  <div className="flex items-center space-x-1.5 justify-start">
+                    <span>Текущий этап</span>
+                    <span>
+                      {sortField === 'stage' ? (
+                        sortDirection === 'asc' ? <ArrowUp className="w-3.5 h-3.5 text-purple-400" /> : <ArrowDown className="w-3.5 h-3.5 text-purple-400" />
+                      ) : (
+                        <ArrowUpDown className="w-3.5 h-3.5 text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      )}
+                    </span>
+                  </div>
+                </th>
+                <th className="px-6 py-4 font-semibold text-right">Действие (Логирование)</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/60">
+              {paginatedCandidates.map((row, i) => (
+                <tr key={'cand-' + i} className="hover:bg-slate-800/20 transition-colors">
+                  <td className="px-6 py-4 font-medium text-slate-200">{row.name}</td>
+                  <td className="px-6 py-4 text-slate-400 font-mono text-xs hidden lg:table-cell">{row.phone || '+7 (999) 123-45-67'}</td>
+                  <td className="px-6 py-4 text-slate-400 text-xs hidden lg:table-cell">{row.source || 'HeadHunter'}</td>
+                  <td className="px-6 py-4 text-slate-400">{row.vacancy}</td>
+                  <td className="px-6 py-4">
+                    <span className={`inline-flex px-2.5 py-1 rounded-md text-xs font-medium ${row.stageColor}`}>
+                      {row.stage}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-right">
+                    <div className="flex items-center justify-end space-x-3">
+                      {row.stageId < 7 ? (
+                        <button 
+                          onClick={() => handleMoveCandidate(row.id, row.stageId)}
+                          className="text-xs px-2.5 py-1 rounded bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 font-semibold hover:text-blue-300 transition-colors cursor-pointer border border-blue-500/10"
+                        >
+                          {row.action}
+                        </button>
+                      ) : (
+                        <span className="text-xs px-2.5 py-1 rounded bg-emerald-600/15 text-emerald-400 font-semibold border border-emerald-500/10 select-none">
+                          Оффер принят 🎉
+                        </span>
+                      )}
+                      
+                      <button 
+                        onClick={() => handleDeleteCandidate(row.id)}
+                        className="p-1.5 hover:bg-red-500/15 text-slate-500 hover:text-red-400 rounded-md transition-colors cursor-pointer"
+                        title="Удалить кандидата из воронки"
+                      >
+                        <Trash className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {/* PRINT-ONLY COMPLETE TABLE (All candidates, no pagination, optimized look) */}
+          <table className="w-full text-sm text-left hidden print:table text-black">
+            <thead className="bg-gray-100 text-gray-700 text-[11px] uppercase tracking-wider border-b border-gray-300">
+              <tr>
+                <th className="px-6 py-3 font-semibold text-left">ФИО Кандидата</th>
+                <th className="px-6 py-3 font-semibold text-left">Телефон</th>
+                <th className="px-6 py-3 font-semibold text-left">Источник сорсинга</th>
+                <th className="px-6 py-3 font-semibold text-left">Вакансия</th>
+                <th className="px-6 py-3 font-semibold text-left">Текущий этап воронки</th>
+                <th className="px-6 py-3 font-semibold text-right">Дата перехода</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {filteredCandidates.map((row, i) => (
+                <tr key={'cand-print-' + i} className="text-gray-900 border-b border-gray-200">
+                  <td className="px-6 py-3.5 font-semibold text-slate-900">{row.name}</td>
+                  <td className="px-6 py-3.5 font-mono text-xs text-gray-700">{row.phone || '+7 (999) 123-45-67'}</td>
+                  <td className="px-6 py-3.5 text-xs text-gray-700">{row.source || 'HeadHunter'}</td>
+                  <td className="px-6 py-3.5 text-gray-800">{row.vacancy}</td>
+                  <td className="px-6 py-3.5 font-semibold text-purple-700">{row.stage}</td>
+                  <td className="px-6 py-3.5 font-mono text-slate-500 text-right text-xs">
+                    {row.date ? new Date(row.date).toLocaleDateString('ru-RU') : '-'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {filteredCandidates.length === 0 && (
+            <div className="py-8 text-center text-slate-500 text-sm">
+              Нет кандидатов, соответствующих критериям поиска "{searchTerm}"
+            </div>
+          )}
+          {filteredCandidates.length > candidatesPage * candidatesItemsPerPage && (
+            <div className="px-6 py-4 border-t border-slate-800 text-center print:hidden">
+              <button 
+                onClick={() => setCandidatesPage(p => p + 1)}
+                className="text-sm text-blue-400 hover:text-blue-300 font-medium transition-colors border border-blue-500/30 px-4 py-2 rounded-lg"
+              >
+                Показать еще ({(filteredCandidates.length - candidatesPage * candidatesItemsPerPage)} шт.)
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+    </div>
+  );
+}
