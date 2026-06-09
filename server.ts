@@ -1,7 +1,11 @@
 import express from 'express';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import mysql from 'mysql2/promise';
+
+// Ручное определение __dirname для поддержки ES-модулей
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Описание этапов
 const stages = [
@@ -938,7 +942,19 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+// ==========================================
+// НАСТРОЙКА РАЗДАЧИ ФРОНТЕНДА ДЛЯ ДИПЛОМА
+// ==========================================
 
+// 1. Указываем Express раздавать статические файлы из папки "dist"
+app.use(express.static(path.join(__dirname, 'dist')));
+
+// 2. Для всех остальных GET-запросов возвращаем index.html (поддержка путей React)
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
+// ==========================================
   app.listen(PORT, "0.0.0.0", () => {
     console.log("🟢 Сервер успешно запущен на порту " + PORT);
   });
